@@ -9,6 +9,7 @@ histórias). Um mapa diz quais pacotes exige; o mod baixa os que faltam junto co
 
 ```
 indice.json                   gerado por ferramentas/acervo.py indexar (não editar à mão)
+CATALOGO.md                   a lista para ler no GitHub, com a bandeira da língua (gerada junto com o índice)
 itens/<id>/ficha.json         a ficha publicada
 itens/<id>/<id>.zip           o arquivo
 ferramentas/acervo.py           confere um envio (formulário) e, se passar, grava em itens/ e refaz o indice.json
@@ -24,7 +25,8 @@ ferramentas/acervo.py           confere um envio (formulário) e, se passar, gra
   "id": "o-sangue-limpo-k3x9",          // [a-z0-9-], 3 a 60; o mesmo em todas as edições
   "tipo": "mapa | campanha | pacote",
   "nome": "O Sangue Limpo", "autor": "Victor", "resumo": "Texto curto.",
-  "lingua": "pt | en | pt,en",
+  "lingua": "pt",                        // a língua em que foi feito, uma das do jogo: en pt es fr de it pl hu cs ru ko zh-cn zh-tw
+                                         // (meta.language no .dmap; o autor diz qual; bandeiras/<código>.png)
   "ato": 1,                              // 1: só o Ato I; 2: precisa do Ato II
   "edicao": 3,                           // sobe a cada nova publicação do mesmo id
   "requer": [{ "id": "bestiario-do-pantano-a1b2", "edicao": 2, "nome": "Bestiário do Pântano" }],
