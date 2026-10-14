@@ -10,6 +10,8 @@ Descent: Legends of the Dark. Like Valkyrie, players download everything inside 
 and **Packages**), and the packages a map needs come along. The editor also downloads packages into its library
 (**📚 Library → Community packages**).*
 
+**O que já está no acervo / What is in it:** [CATALOGO.md](CATALOGO.md), com a bandeira da língua em que cada mapa foi feito (uma das línguas do jogo, dita pelo autor). / with the flag of the language each map was made in (one of the game's, told by the author).
+
 ## Publicar / Publishing
 
 1. No editor, **📚 Acervo → Publicar este mapa** (ou campanha, ou um pacote seu). O editor salva um arquivo
