@@ -21,10 +21,13 @@ ID = re.compile(r'^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$')
 TIPOS = ('mapa', 'campanha', 'pacote')
 EXTENSOES = ('.dmap', '.dcamp', '.bigorna', '.json', '.ogg', '.mp3', '.wav', '.mp4', '.webm', '.png', '.jpg', '.jpeg', '.webp', '.glb', '.gltf', '.obj', '.bin', '.mtl')
 NOME = re.compile(r'^[^/\\:*?"<>|\x00-\x1f]{1,120}$')
+IMAGEM_DA_OBRA = re.compile(r'^imagens/[0-9a-f]{32}\.(png|jpg|webp|gif)$')
 MAX_ZIP = 60 * 1024 * 1024          # o arquivo enviado
 MAX_DENTRO = 250 * 1024 * 1024      # tudo descompactado
 # sem curadoria: um limite de envios por pessoa por dia (contra enxurrada); ACERVO_LIMITE_POR_DIA muda (0: sem limite)
 LIMITE_POR_DIA = int(os.environ.get('ACERVO_LIMITE_POR_DIA', '10'))
+FICHA = 'bigorna-acervo.json'   # a ficha dentro do zip (o editor a põe)
+REFERENCIA = re.compile(r'"(imagens/[0-9a-f]{32}\.(?:png|jpg|webp|gif))"')
 ANEXO = re.compile(r'https://github\.com/(?:user-attachments/files/\d+|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/files/\d+)/[^\s)\]"<>]+\.zip')
 
 
@@ -85,6 +88,24 @@ def fichas_publicadas():
     return r
 
 
+SEM_DONO = ('featPool',)
+
+
+def chave(o):
+    """A chave de uma entrada do "custom" (como o mod junta: id, _id ou hero)."""
+    if not isinstance(o, dict): return None
+    for k in ('id', '_id', 'hero'):
+        if o.get(k) is not None: return str(o[k])
+    return None
+
+
+def custom_do_pacote(id_, ficha):
+    """O "custom" do pacote.json de um pacote publicado (o arquivo dele em itens/)."""
+    c = os.path.join(ITENS, id_, ficha.get('arquivo') or (id_ + '.zip'))
+    try: return (json.loads(zipfile.ZipFile(c).read('pacote.json').decode('utf-8-sig')).get('custom') or {})
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile): raise Recusa('o pacote exigido %s está sem arquivo legível no acervo' % id_)
+
+
 def conferir(zip_bytes, ficha_pedido, autor, publicadas=None):
     """Confere um envio. Devolve a ficha que vai para o acervo; Recusa com a razão, se algo não serve."""
     publicadas = fichas_publicadas() if publicadas is None else publicadas
@@ -96,10 +117,11 @@ def conferir(zip_bytes, ficha_pedido, autor, publicadas=None):
     nomes = [i.filename for i in infos]
     if len(set(n.lower() for n in nomes)) != len(nomes): raise Recusa('há arquivos repetidos no zip')
     for n in nomes:
+        if IMAGEM_DA_OBRA.match(n): continue   # (v240: as imagens da obra, na pasta "imagens", com o nome do conteúdo)
         if '/' in n or '\\' in n or n.startswith('.') or not NOME.match(n): raise Recusa('nome de arquivo não aceito: %s (o zip é plano, sem pastas)' % n)
         if os.path.splitext(n)[1].lower() not in EXTENSOES: raise Recusa('tipo de arquivo não aceito: %s' % n)
-    if 'bigorna-acervo.json' not in nomes: raise Recusa('o zip não traz a ficha (bigorna-acervo.json): use o arquivo que o editor salvou')
-    f = ler_json(z.read('bigorna-acervo.json'), 'bigorna-acervo.json')
+    if FICHA not in nomes: raise Recusa('o zip não traz a ficha (%s): use o arquivo que o editor salvou' % FICHA)
+    f = ler_json(z.read(FICHA), FICHA)
     if f.get('formato') != 'bigorna-acervo': raise Recusa('a ficha do zip não é do acervo do Bigorna')
     for k in ('id', 'tipo', 'edicao'):
         if f.get(k) != ficha_pedido.get(k): raise Recusa('a ficha do pedido e a do zip não batem (%s)' % k)
@@ -138,7 +160,7 @@ def conferir(zip_bytes, ficha_pedido, autor, publicadas=None):
         if antes.get('tipo') != tipo: raise Recusa('o acervo tem outra coisa com este id')
         if (antes.get('github') or '').lower() != (autor or '').lower(): raise Recusa('só quem publicou %s (%s) manda edições novas dele' % (id_, antes.get('github')))
         if ed <= antes.get('edicao', 0): raise Recusa('o acervo já tem a edição %d; esta precisa ser maior' % antes.get('edicao', 0))
-    # os pacotes exigidos estão no acervo, na edição pedida ou mais nova
+    # os pacotes exigidos estão no acervo, na edição pedida ou mais nova (quem baixa a obra baixa antes esses pacotes)
     requer = f.get('requer') or []
     if not isinstance(requer, list): raise Recusa('requer não é uma lista')
     for q in requer:
@@ -146,10 +168,34 @@ def conferir(zip_bytes, ficha_pedido, autor, publicadas=None):
         p = publicadas.get(q['id'])
         if not p or p.get('tipo') != 'pacote': raise Recusa('o pacote exigido %s não está no acervo (publique o pacote antes)' % q['id'])
         if p.get('edicao', 0) < int(q.get('edicao') or 1): raise Recusa('o pacote exigido %s está na edição %d no acervo; o mapa pede a %s' % (q['id'], p.get('edicao', 0), q.get('edicao')))
+    pedidos = sorted((q['id'], int(q.get('edicao') or 1)) for q in requer)
     for n in docs:
         d = json.loads(z.read(n).decode('utf-8-sig'))
-        ids = sorted(x.get('id') for x in (d.get('requires') or []) if isinstance(x, dict))
-        if ids != sorted(q['id'] for q in requer): raise Recusa('os pacotes exigidos em %s não batem com os da ficha' % n)
+        reqs = [x for x in (d.get('requires') or []) if isinstance(x, dict)]
+        if sorted(x.get('id') for x in reqs) != [i for i, _ in pedidos]: raise Recusa('os pacotes exigidos em %s não batem com os da ficha' % n)
+        if sorted((x.get('id'), int(x.get('edition') or 1)) for x in reqs) != pedidos: raise Recusa('as edições dos pacotes exigidos em %s não batem com as da ficha' % n)
+    # o conteúdo próprio da Oficina (v243) vai em pacotes, publicados à parte: o "custom" de um mapa ou campanha só leva entradas
+    # dos pacotes exigidos (iguais saem; mudadas ficam, por cima da do pacote). O featPool é uma lista de ids do jogo.
+    if docs:
+        dos_pacotes = set()
+        for q in requer:
+            for k, l in custom_do_pacote(q['id'], publicadas[q['id']]).items():
+                if isinstance(l, list): dos_pacotes.update((k, chave(o)) for o in l if chave(o) is not None)
+        proprios = []
+        for n in docs:
+            for k, l in (json.loads(z.read(n).decode('utf-8-sig')).get('custom') or {}).items():
+                if k in SEM_DONO or not isinstance(l, list): continue
+                proprios += ['%s (%s)' % (o.get('name') or chave(o), k) for o in l if isinstance(o, dict) and chave(o) is not None and (k, chave(o)) not in dos_pacotes]
+        if proprios:
+            vistos = sorted(set(proprios))
+            raise Recusa('a obra leva conteúdo próprio da Oficina fora dos pacotes que exige: %s%s. Esse conteúdo vai num pacote do acervo, publicado à parte; vincule a obra a ele no editor e publique de novo'
+                         % (', '.join(vistos[:8]), ' e mais %d' % (len(vistos) - 8) if len(vistos) > 8 else ''))
+    # as imagens (v240): os arquivos levam referências "imagens/<nome>"; cada uma vem no zip, na pasta imagens
+    imagens = {n for n in nomes if IMAGEM_DA_OBRA.match(n)}
+    for n in nomes:
+        if not n.endswith(('.dmap', '.dcamp', '.bigorna')) and n != 'pacote.json': continue
+        for r in sorted(set(REFERENCIA.findall(z.read(n).decode('utf-8-sig', 'replace')))):
+            if r not in imagens: raise Recusa('%s usa a imagem %s, que não veio no zip (salve o arquivo de novo pelo editor)' % (n, r))
     final = {k: f[k] for k in ('formato', 'versao', 'id', 'tipo', 'nome', 'autor', 'resumo', 'lingua', 'ato', 'edicao', 'requer', 'conteudo', 'editor', 'data') if k in f}
     final.update({'arquivo': id_ + '.zip', 'tamanho': len(zip_bytes), 'sha256': hashlib.sha256(zip_bytes).hexdigest(), 'github': autor or '',
                   'publicado': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')})
@@ -226,7 +272,7 @@ def main(args):
     acao = args[0] if args else ''
     if acao == 'indexar': indexar(); return 0
     if acao == 'zip':
-        try: print(json.dumps(conferir(open(args[1], 'rb').read(), json.loads(zipfile.ZipFile(args[1]).read('bigorna-acervo.json')), args[2] if len(args) > 2 else ''), ensure_ascii=False, indent=1)); return 0
+        try: print(json.dumps(conferir(open(args[1], 'rb').read(), json.loads(zipfile.ZipFile(args[1]).read(FICHA)), args[2] if len(args) > 2 else ''), ensure_ascii=False, indent=1)); return 0
         except Recusa as e: print('RECUSADO:', e); return 1
     if acao not in ('conferir', 'gravar'): print(__doc__); return 2
     corpo = os.environ.get('CORPO_DO_PEDIDO', ''); autor = os.environ.get('AUTOR_DO_PEDIDO', '')
